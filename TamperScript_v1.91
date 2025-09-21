@@ -1,0 +1,385 @@
+// ==UserScript==
+// @name         Marshal Mood-Based Face (248x248) - v1.9 (responsive & anchored)
+// @namespace    http://tampermonkey.net/
+// @version      1.91
+// @description  Avatar changes with expression-specific animations, robustly responsive to sidebar open/close and chat layout.
+// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/*
+// @grant        none
+// ==/UserScript==
+(function () {
+  'use strict';
+
+  const faces = [
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/1.png", // smug
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/2.png", // angry
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/3.png", // happy
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/4.png", // annoyed
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/5.png", // smirk
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/6.png"  // shy
+  ];
+
+  // size constants
+  const SIZE_SMALL = 126;
+  const SIZE_LARGE = 160;
+
+  // container
+  const container = document.createElement('div');
+  container.id = 'marshal-avatar-container';
+  Object.assign(container.style, {
+    position: 'fixed',
+    left: '20px',
+    bottom: '110px',
+    width: SIZE_SMALL + 'px',
+    height: SIZE_SMALL + 'px',
+    zIndex: 2147483647,
+    pointerEvents: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'width 240ms ease, height 240ms ease, left 240ms ease, bottom 240ms ease, opacity 180ms ease, transform 240ms ease',
+    transformOrigin: 'bottom left'
+  });
+
+  // image
+  const img = document.createElement('img');
+  img.src = faces[0];
+  img.width = SIZE_SMALL;
+  img.height = SIZE_SMALL;
+  Object.assign(img.style, {
+    objectFit: 'contain',
+    borderRadius: '12px',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+    display: 'block'
+  });
+  container.appendChild(img);
+
+  // label
+  const label = document.createElement('div');
+  label.textContent = 'Essex';
+  Object.assign(label.style, {
+    position: 'absolute',
+    bottom: (-20) + 'px',
+    left: '0',
+    fontSize: '11px',
+    color: '#dff7ff',
+    textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+    pointerEvents: 'none',
+    opacity: '0.95'
+  });
+  container.appendChild(label);
+
+  // append to body (safer than documentElement for layout)
+  (document.body || document.documentElement).appendChild(container);
+
+  // expression animations CSS (unchanged, subtle timings)
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes smugSway { 0%{transform:rotate(0)}30%{transform:rotate(-4deg)}60%{transform:rotate(3deg)}100%{transform:rotate(0)} }
+    @keyframes angryShake { 0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)} }
+    @keyframes happyBounce { 0%{transform:translateY(0) scale(1)}30%{transform:translateY(-12px) scale(1.05)}60%{transform:translateY(0) scale(0.97)}100%{transform:translateY(0) scale(1)} }
+    @keyframes annoyedTilt { 0%{transform:rotate(0)}40%{transform:rotate(-6deg)}80%{transform:rotate(3deg)}100%{transform:rotate(0)} }
+    @keyframes smirkPop { 0%{transform:scale(1)}30%{transform:scale(1.08) rotate(-3deg)}60%{transform:scale(0.97) rotate(1deg)}100%{transform:scale(1)} }
+    @keyframes shyPeek { 0%{transform:translateY(0) scale(1); opacity:1}30%{transform:translateY(10px) scale(0.9); opacity:0.8}60%{transform:translateY(0) scale(1.02); opacity:1}100%{transform:translateY(0) scale(1); opacity:1} }
+
+    .marshal-smug    { animation: smugSway 500ms ease; }
+    .marshal-angry   { animation: angryShake 350ms ease; }
+    .marshal-happy   { animation: happyBounce 420ms ease; }
+    .marshal-annoyed { animation: annoyedTilt 450ms ease; }
+    .marshal-smirk   { animation: smirkPop 400ms ease; }
+    .marshal-shy     { animation: shyPeek 500ms ease; }
+  `;
+  document.head.appendChild(style);
+
+  // ============================
+  // helper layout detection
+  // ============================
+  function isVisible(el) {
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return (r.width > 8 && r.height > 8);
+  }
+
+  function findSidebar() {
+    const selectors = [
+      'nav[role="navigation"]',
+      'nav',
+      'aside',
+      'div[data-testid="sidebar"]',
+      'div[class*="sidebar"]',
+      'div[aria-label*="sidebar"]'
+    ];
+    for (const s of selectors) {
+      const el = document.querySelector(s);
+      if (el && isVisible(el)) return el;
+    }
+    // fallback: try to detect left column by scanning children of body for narrow left column
+    const candidates = Array.from(document.body.children).filter(c => {
+      const r = c.getBoundingClientRect();
+      return r.left < 40 && r.width > 40 && r.width < window.innerWidth * 0.35;
+    });
+    if (candidates.length) return candidates[0];
+    return null;
+  }
+
+  function findMain() {
+    const selectors = [
+      'main',
+      'div[role="main"]',
+      'div[class*="chat"]',
+      'div[class*="Main"]'
+    ];
+    for (const s of selectors) {
+      const el = document.querySelector(s);
+      if (el && isVisible(el)) return el;
+    }
+    // fallback: the largest central element
+    let best = null;
+    let bestArea = 0;
+    Array.from(document.body.querySelectorAll('div')).forEach(d => {
+      const r = d.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea && r.width > 300 && r.left > 40) { bestArea = area; best = d; }
+    });
+    return best;
+  }
+
+  // compute and apply layout
+  let lastState = {};
+  function updateLayout() {
+    try {
+      const sidebar = findSidebar();
+      const main = findMain();
+      const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : null;
+      const mainRect = main ? main.getBoundingClientRect() : null;
+
+      // determine "sidebar open" - heuristics:
+      const sidebarOpen = sidebarRect ? sidebarRect.width > 100 : (mainRect ? mainRect.left > 120 : true);
+
+      // target size
+      const targetSize = (sidebarRect && sidebarRect.width > 100) ? SIZE_SMALL : SIZE_LARGE;
+
+      // compute left: prefer to anchor to main's left if available, else to sidebar.right+12 or small margin
+      let leftPx;
+      if (mainRect) {
+        leftPx = Math.max(8, Math.round(mainRect.left + 10)); // small inset from chat area
+      } else if (sidebarRect) {
+        leftPx = Math.max(8, Math.round(sidebarRect.right + 12));
+      } else {
+        leftPx = sidebarOpen ? 80 : 20;
+      }
+
+      // when large, nudge a bit more to left to avoid overlap with text
+      if (!sidebarRect || sidebarRect.width < 100) {
+          leftPx = 12; // anchor left
+      }
+
+      // bottom: raise more when larger
+      const targetBottom = sidebarOpen ? 110 : 170;
+
+      // only apply changes if changed (avoid forcing reflow constantly)
+      const cur = {
+        size: parseInt(container.style.width, 10) || SIZE_SMALL,
+        left: parseInt(container.style.left, 10) || 0,
+        bottom: parseInt(container.style.bottom, 10) || 0
+      };
+
+      if (cur.size !== targetSize) {
+        container.style.width = targetSize + 'px';
+        container.style.height = targetSize + 'px';
+        img.width = targetSize;
+        img.height = targetSize;
+      }
+
+      // apply left and bottom smoothly
+      const leftStr = leftPx + 'px';
+      const bottomStr = targetBottom + 'px';
+      if (container.style.left !== leftStr) container.style.left = leftStr;
+      if (container.style.bottom !== bottomStr) container.style.bottom = bottomStr;
+
+      // debug stash
+      lastState = { sidebarRect, mainRect, sidebarOpen, targetSize, leftPx, targetBottom };
+    } catch (e) {
+      console.warn('Marshal-avatar: layout update failed', e);
+    }
+  }
+
+  // run initial layout
+  updateLayout();
+
+  // observers: robust approach - observe sidebar/main resize + mutation fallback + window resize
+  let roSidebar = null, roMain = null;
+  const tryObserve = () => {
+    const sidebar = findSidebar();
+    const main = findMain();
+    if (sidebar && typeof ResizeObserver !== 'undefined') {
+      try {
+        if (roSidebar) roSidebar.disconnect();
+        roSidebar = new ResizeObserver(updateLayout);
+        roSidebar.observe(sidebar);
+      } catch (e) { roSidebar = null; }
+    }
+    if (main && typeof ResizeObserver !== 'undefined') {
+      try {
+        if (roMain) roMain.disconnect();
+        roMain = new ResizeObserver(updateLayout);
+        roMain.observe(main);
+      } catch (e) { roMain = null; }
+    }
+  };
+  tryObserve();
+
+  // watch for DOM changes that might swap the sidebar/main elements (ChatGPT SPA)
+  const mo = new MutationObserver((mut) => {
+    // small debounce to avoid heavy calls
+    if (mo._scheduled) return;
+    mo._scheduled = true;
+    setTimeout(() => {
+      mo._scheduled = false;
+      tryObserve();
+      updateLayout();
+    }, 120);
+  });
+  mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+  // window resize fallback
+  window.addEventListener('resize', updateLayout, { passive: true });
+
+  // give a small periodic fallback in case all else fails (stops after page stabilizes)
+  let fallbackCount = 0;
+  const fallbackInterval = setInterval(() => {
+    updateLayout();
+    fallbackCount++;
+    if (fallbackCount > 30) {
+      clearInterval(fallbackInterval);
+    }
+  }, 300);
+
+  // ============================
+  // Mood detection + anim
+  // ============================
+  function pickFaceByText(text) {
+    if (!text) return faces[0];
+    const lower = text.toLowerCase();
+    if (/\[mood:smug\]/i.test(lower)) return faces[0];
+    if (/\[mood:angry\]/i.test(lower)) return faces[1];
+    if (/\[mood:happy\]/i.test(lower)) return faces[2];
+    if (/\[mood:annoyed\]/i.test(lower)) return faces[3];
+    if (/\[mood:smirk\]/i.test(lower)) return faces[4];
+    if (/\[mood:shy\]/i.test(lower)) return faces[5];
+
+    if (/(thank you|thanks|appreciate|grateful|cheers|great|awesome|glad)/.test(lower)) return faces[2]; // happy
+    if (/(angry|furious|rage|attack|fight|enemy|war|destroy|crush)/.test(lower)) return faces[1]; // angry
+    if (/(ugh|seriously|annoyed|irritating|bother|tired)/.test(lower)) return faces[3]; // annoyed
+    if (/(heh|hehe|well then|sneaky|smirk)/.test(lower)) return faces[4]; // smirk
+    if (/(maybe|uh|i guess|blush|embarrassed|shy)/.test(lower)) return faces[5]; // shy
+
+    return faces[0];
+  }
+
+  function getAnimationClass(faceSrc) {
+    if (faceSrc.endsWith("1.png")) return "marshal-smug";
+    if (faceSrc.endsWith("2.png")) return "marshal-angry";
+    if (faceSrc.endsWith("3.png")) return "marshal-happy";
+    if (faceSrc.endsWith("4.png")) return "marshal-annoyed";
+    if (faceSrc.endsWith("5.png")) return "marshal-smirk";
+    if (faceSrc.endsWith("6.png")) return "marshal-shy";
+    return "marshal-smug";
+  }
+
+  function updateAvatar(text) {
+    const newSrc = pickFaceByText(text);
+    if (!img.src.endsWith(newSrc)) {
+      img.style.opacity = '0';
+      setTimeout(() => {
+        img.src = newSrc;
+        img.style.opacity = '1';
+        const animClass = getAnimationClass(newSrc);
+        img.className = ""; // reset animation classes
+        void img.offsetWidth; // force reflow to restart animation
+        img.classList.add(animClass);
+      }, 140);
+    }
+  }
+
+  // quick helper to find assistant text
+  function findLatestAssistantText() {
+    const selectors = [
+      'div[data-testid="assistant-response"]',
+      'div[data-testid="message-content"]',
+      'div[class*="assistant"]',
+      'div[role="listitem"] .text-base',
+      'main'
+    ];
+    for (const sel of selectors) {
+      try {
+        const els = Array.from(document.querySelectorAll(sel));
+        if (els.length) {
+          let latest = null; let maxTop = -Infinity;
+          for (const el of els) {
+            const txt = (el.innerText || '').trim();
+            if (!txt || txt.length < 10) continue;
+            const r = el.getBoundingClientRect();
+            if (r.top > maxTop) { maxTop = r.top; latest = txt; }
+          }
+          if (latest) return latest;
+        }
+      } catch (e) {}
+    }
+    const candidates = Array.from(document.querySelectorAll('div, p, span'))
+      .filter(el => el && el.innerText)
+      .filter(el => {
+        const txt = el.innerText.trim();
+        if (txt.length < 12 || txt.length > 10000) return false;
+        if (/^(new chat|clear chat|regenerate|send)$/i.test(txt)) return false;
+        return true;
+      });
+    if (!candidates.length) return null;
+    let chosen = candidates[0];
+    let maxTop = -Infinity;
+    for (const el of candidates) {
+      const r = el.getBoundingClientRect();
+      if (r.top > maxTop) { maxTop = r.top; chosen = el; }
+    }
+    return chosen ? chosen.innerText.trim() : null;
+  }
+
+  // observe DOM for new assistant replies
+  let lastSeen = null;
+  const replyObserver = new MutationObserver(() => {
+    if (replyObserver._scheduled) return;
+    replyObserver._scheduled = true;
+    setTimeout(() => {
+      replyObserver._scheduled = false;
+      const latest = findLatestAssistantText();
+      if (latest && latest !== lastSeen) {
+        lastSeen = latest;
+        // strip mood tags only for display detection if needed
+        updateAvatar(latest);
+      }
+    }, 150);
+  });
+  replyObserver.observe(document.body, { childList: true, subtree: true });
+
+  // expose a force helper for manual tests
+  window.__marshal_avatar_force = function (s) {
+    lastSeen = s;
+    updateAvatar(s);
+    console.info('Marshal-avatar forced to:', s);
+  };
+
+  // cleanup on unload
+  window.addEventListener('beforeunload', () => {
+    try { replyObserver.disconnect(); } catch (e) {}
+    try { mo.disconnect(); } catch (e) {}
+    try { if (roSidebar) roSidebar.disconnect(); if (roMain) roMain.disconnect(); } catch (e) {}
+    if (container && container.parentNode) container.parentNode.removeChild(container);
+  });
+
+  // final: ensure initial positioning applied in case observers fire late
+  setTimeout(updateLayout, 250);
+  setTimeout(updateLayout, 800);
+})();
+

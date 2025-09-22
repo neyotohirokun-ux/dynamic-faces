@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Marshal Mood-Based Face (248x248) - v1.9 (responsive & anchored)
+// @name         Marshal Mood-Based Face (248x248) - v1.93 (sidebar fix + toggle debug)
 // @namespace    http://tampermonkey.net/
-// @version      1.91
-// @description  Avatar changes with expression-specific animations, robustly responsive to sidebar open/close and chat layout.
+// @version      1.93
+// @description  Avatar changes with expression-specific animations, detects sidebar open/close reliably, debug toggleable.
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*
 // @grant        none
@@ -19,11 +19,9 @@
     "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/6.png"  // shy
   ];
 
-  // size constants
   const SIZE_SMALL = 126;
-  const SIZE_LARGE = 160;
+  const SIZE_LARGE = 180;
 
-  // container
   const container = document.createElement('div');
   container.id = 'marshal-avatar-container';
   Object.assign(container.style, {
@@ -41,7 +39,6 @@
     transformOrigin: 'bottom left'
   });
 
-  // image
   const img = document.createElement('img');
   img.src = faces[0];
   img.width = SIZE_SMALL;
@@ -54,7 +51,6 @@
   });
   container.appendChild(img);
 
-  // label
   const label = document.createElement('div');
   label.textContent = 'Essex';
   Object.assign(label.style, {
@@ -69,10 +65,8 @@
   });
   container.appendChild(label);
 
-  // append to body (safer than documentElement for layout)
   (document.body || document.documentElement).appendChild(container);
 
-  // expression animations CSS (unchanged, subtle timings)
   const style = document.createElement('style');
   style.textContent = `
     @keyframes smugSway { 0%{transform:rotate(0)}30%{transform:rotate(-4deg)}60%{transform:rotate(3deg)}100%{transform:rotate(0)} }
@@ -88,12 +82,29 @@
     .marshal-annoyed { animation: annoyedTilt 450ms ease; }
     .marshal-smirk   { animation: smirkPop 400ms ease; }
     .marshal-shy     { animation: shyPeek 500ms ease; }
+
+    #marshal-debug {
+      position: fixed;
+      top: 50px;
+      right: 20px;
+      background: rgba(0,0,0,0.7);
+      color: #0ff;
+      font-size: 11px;
+      font-family: monospace;
+      padding: 6px 8px;
+      border-radius: 6px;
+      z-index: 2147483647;
+      white-space: pre;
+      display: none;
+    }
   `;
   document.head.appendChild(style);
 
-  // ============================
-  // helper layout detection
-  // ============================
+  const debugBox = document.createElement('div');
+  debugBox.id = 'marshal-debug';
+  document.body.appendChild(debugBox);
+
+  // Helper functions
   function isVisible(el) {
     if (!el) return false;
     const cs = getComputedStyle(el);
@@ -103,179 +114,78 @@
   }
 
   function findSidebar() {
-    const selectors = [
-      'nav[role="navigation"]',
-      'nav',
-      'aside',
-      'div[data-testid="sidebar"]',
-      'div[class*="sidebar"]',
-      'div[aria-label*="sidebar"]'
-    ];
-    for (const s of selectors) {
-      const el = document.querySelector(s);
-      if (el && isVisible(el)) return el;
-    }
-    // fallback: try to detect left column by scanning children of body for narrow left column
-    const candidates = Array.from(document.body.children).filter(c => {
-      const r = c.getBoundingClientRect();
-      return r.left < 40 && r.width > 40 && r.width < window.innerWidth * 0.35;
-    });
-    if (candidates.length) return candidates[0];
-    return null;
+    const el = document.querySelector('nav[role="navigation"], aside, div[data-testid="sidebar"], div[class*="sidebar"], div[aria-label*="sidebar"]');
+    return el && isVisible(el) ? el : null;
   }
 
   function findMain() {
-    const selectors = [
-      'main',
-      'div[role="main"]',
-      'div[class*="chat"]',
-      'div[class*="Main"]'
-    ];
-    for (const s of selectors) {
-      const el = document.querySelector(s);
-      if (el && isVisible(el)) return el;
-    }
-    // fallback: the largest central element
-    let best = null;
-    let bestArea = 0;
-    Array.from(document.body.querySelectorAll('div')).forEach(d => {
-      const r = d.getBoundingClientRect();
-      const area = r.width * r.height;
-      if (area > bestArea && r.width > 300 && r.left > 40) { bestArea = area; best = d; }
-    });
-    return best;
+    const el = document.querySelector('main, div[role="main"], div[class*="chat"], div[class*="Main"]');
+    return el && isVisible(el) ? el : null;
   }
 
-  // compute and apply layout
-  let lastState = {};
+  let lastSidebarState = null;
   function updateLayout() {
     try {
       const sidebar = findSidebar();
       const main = findMain();
-      const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : null;
       const mainRect = main ? main.getBoundingClientRect() : null;
 
-      // determine "sidebar open" - heuristics:
-      const sidebarOpen = sidebarRect ? sidebarRect.width > 100 : (mainRect ? mainRect.left > 120 : true);
-
-      // target size
-      const targetSize = (sidebarRect && sidebarRect.width > 100) ? SIZE_SMALL : SIZE_LARGE;
-
-      // compute left: prefer to anchor to main's left if available, else to sidebar.right+12 or small margin
-      let leftPx;
-      if (mainRect) {
-        leftPx = Math.max(8, Math.round(mainRect.left + 10)); // small inset from chat area
-      } else if (sidebarRect) {
-        leftPx = Math.max(8, Math.round(sidebarRect.right + 12));
-      } else {
-        leftPx = sidebarOpen ? 80 : 20;
-      }
-
-      // when large, nudge a bit more to left to avoid overlap with text
-      if (!sidebarRect || sidebarRect.width < 100) {
-          leftPx = 12; // anchor left
-      }
-
-      // bottom: raise more when larger
+      // NEW RULE: Sidebar is open if main area shifted to the right
+      const sidebarOpen = mainRect ? (mainRect.left > 100) : !!sidebar;
+      const targetSize = sidebarOpen ? SIZE_SMALL : SIZE_LARGE;
       const targetBottom = sidebarOpen ? 110 : 170;
+      let leftPx = mainRect ? Math.max(8, Math.round(mainRect.left + 10)) : 12;
+      if (!sidebarOpen) leftPx = 12;
 
-      // only apply changes if changed (avoid forcing reflow constantly)
-      const cur = {
-        size: parseInt(container.style.width, 10) || SIZE_SMALL,
-        left: parseInt(container.style.left, 10) || 0,
-        bottom: parseInt(container.style.bottom, 10) || 0
-      };
+      // Resize + reposition
+      container.style.width = targetSize + 'px';
+      container.style.height = targetSize + 'px';
+      img.width = targetSize;
+      img.height = targetSize;
+      const margin = 16;
+      container.style.left = (leftPx + margin) + 'px';
+      container.style.bottom = targetBottom + 'px';
 
-      if (cur.size !== targetSize) {
-        container.style.width = targetSize + 'px';
-        container.style.height = targetSize + 'px';
-        img.width = targetSize;
-        img.height = targetSize;
+      // Debug toggle
+      if (window.__marshal_avatar_debug) {
+        debugBox.style.display = 'block';
+        debugBox.textContent =
+          `sidebarOpen: ${sidebarOpen}\n` +
+          `size: ${targetSize}\n` +
+          `left: ${leftPx}\n` +
+          `mainLeft: ${mainRect ? mainRect.left : 'null'}`;
+      } else {
+        debugBox.style.display = 'none';
       }
 
-      // apply left and bottom smoothly
-      const leftStr = leftPx + 'px';
-      const bottomStr = targetBottom + 'px';
-      if (container.style.left !== leftStr) container.style.left = leftStr;
-      if (container.style.bottom !== bottomStr) container.style.bottom = bottomStr;
-
-      // debug stash
-      lastState = { sidebarRect, mainRect, sidebarOpen, targetSize, leftPx, targetBottom };
+      lastSidebarState = sidebarOpen;
     } catch (e) {
       console.warn('Marshal-avatar: layout update failed', e);
     }
   }
 
-  // run initial layout
+  // Initial + observers
   updateLayout();
-
-  // observers: robust approach - observe sidebar/main resize + mutation fallback + window resize
-  let roSidebar = null, roMain = null;
-  const tryObserve = () => {
-    const sidebar = findSidebar();
-    const main = findMain();
-    if (sidebar && typeof ResizeObserver !== 'undefined') {
-      try {
-        if (roSidebar) roSidebar.disconnect();
-        roSidebar = new ResizeObserver(updateLayout);
-        roSidebar.observe(sidebar);
-      } catch (e) { roSidebar = null; }
-    }
-    if (main && typeof ResizeObserver !== 'undefined') {
-      try {
-        if (roMain) roMain.disconnect();
-        roMain = new ResizeObserver(updateLayout);
-        roMain.observe(main);
-      } catch (e) { roMain = null; }
-    }
-  };
-  tryObserve();
-
-  // watch for DOM changes that might swap the sidebar/main elements (ChatGPT SPA)
-  const mo = new MutationObserver((mut) => {
-    // small debounce to avoid heavy calls
-    if (mo._scheduled) return;
-    mo._scheduled = true;
-    setTimeout(() => {
-      mo._scheduled = false;
-      tryObserve();
-      updateLayout();
-    }, 120);
-  });
+  const mo = new MutationObserver(() => setTimeout(updateLayout, 120));
   mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-
-  // window resize fallback
   window.addEventListener('resize', updateLayout, { passive: true });
+  setInterval(updateLayout, 500);
 
-  // give a small periodic fallback in case all else fails (stops after page stabilizes)
-  let fallbackCount = 0;
-  const fallbackInterval = setInterval(() => {
-    updateLayout();
-    fallbackCount++;
-    if (fallbackCount > 30) {
-      clearInterval(fallbackInterval);
-    }
-  }, 300);
-
-  // ============================
-  // Mood detection + anim
-  // ============================
+  // Face switching
   function pickFaceByText(text) {
     if (!text) return faces[0];
     const lower = text.toLowerCase();
-    if (/\[mood:smug\]/i.test(lower)) return faces[0];
-    if (/\[mood:angry\]/i.test(lower)) return faces[1];
-    if (/\[mood:happy\]/i.test(lower)) return faces[2];
-    if (/\[mood:annoyed\]/i.test(lower)) return faces[3];
-    if (/\[mood:smirk\]/i.test(lower)) return faces[4];
-    if (/\[mood:shy\]/i.test(lower)) return faces[5];
-
-    if (/(thank you|thanks|appreciate|grateful|cheers|great|awesome|glad)/.test(lower)) return faces[2]; // happy
-    if (/(angry|furious|rage|attack|fight|enemy|war|destroy|crush)/.test(lower)) return faces[1]; // angry
-    if (/(ugh|seriously|annoyed|irritating|bother|tired)/.test(lower)) return faces[3]; // annoyed
-    if (/(heh|hehe|well then|sneaky|smirk)/.test(lower)) return faces[4]; // smirk
-    if (/(maybe|uh|i guess|blush|embarrassed|shy)/.test(lower)) return faces[5]; // shy
-
+    if (/\[mood:smug\]/.test(lower)) return faces[0];
+    if (/\[mood:angry\]/.test(lower)) return faces[1];
+    if (/\[mood:happy\]/.test(lower)) return faces[2];
+    if (/\[mood:annoyed\]/.test(lower)) return faces[3];
+    if (/\[mood:smirk\]/.test(lower)) return faces[4];
+    if (/\[mood:shy\]/.test(lower)) return faces[5];
+    if (/(thank you|thanks|glad|appreciate)/.test(lower)) return faces[2];
+    if (/(angry|rage|attack|war)/.test(lower)) return faces[1];
+    if (/(ugh|annoyed|tired|seriously)/.test(lower)) return faces[3];
+    if (/(smirk|hehe|sneaky|heh)/.test(lower)) return faces[4];
+    if (/(maybe|uh|blush|shy)/.test(lower)) return faces[5];
     return faces[0];
   }
 
@@ -296,90 +206,41 @@
       setTimeout(() => {
         img.src = newSrc;
         img.style.opacity = '1';
-        const animClass = getAnimationClass(newSrc);
-        img.className = ""; // reset animation classes
-        void img.offsetWidth; // force reflow to restart animation
-        img.classList.add(animClass);
+        img.className = "";
+        void img.offsetWidth;
+        img.classList.add(getAnimationClass(newSrc));
       }, 140);
     }
   }
 
-  // quick helper to find assistant text
   function findLatestAssistantText() {
-    const selectors = [
-      'div[data-testid="assistant-response"]',
-      'div[data-testid="message-content"]',
-      'div[class*="assistant"]',
-      'div[role="listitem"] .text-base',
-      'main'
-    ];
-    for (const sel of selectors) {
-      try {
-        const els = Array.from(document.querySelectorAll(sel));
-        if (els.length) {
-          let latest = null; let maxTop = -Infinity;
-          for (const el of els) {
-            const txt = (el.innerText || '').trim();
-            if (!txt || txt.length < 10) continue;
-            const r = el.getBoundingClientRect();
-            if (r.top > maxTop) { maxTop = r.top; latest = txt; }
-          }
-          if (latest) return latest;
-        }
-      } catch (e) {}
-    }
-    const candidates = Array.from(document.querySelectorAll('div, p, span'))
-      .filter(el => el && el.innerText)
-      .filter(el => {
-        const txt = el.innerText.trim();
-        if (txt.length < 12 || txt.length > 10000) return false;
-        if (/^(new chat|clear chat|regenerate|send)$/i.test(txt)) return false;
-        return true;
-      });
-    if (!candidates.length) return null;
-    let chosen = candidates[0];
-    let maxTop = -Infinity;
-    for (const el of candidates) {
+    const els = Array.from(document.querySelectorAll('div[data-testid="assistant-response"], div[data-testid="message-content"], div[class*="assistant"]'));
+    if (!els.length) return null;
+    let latest = null, maxTop = -Infinity;
+    for (const el of els) {
+      const txt = (el.innerText || '').trim();
+      if (!txt || txt.length < 10) continue;
       const r = el.getBoundingClientRect();
-      if (r.top > maxTop) { maxTop = r.top; chosen = el; }
+      if (r.top > maxTop) { maxTop = r.top; latest = txt; }
     }
-    return chosen ? chosen.innerText.trim() : null;
+    return latest;
   }
 
-  // observe DOM for new assistant replies
   let lastSeen = null;
   const replyObserver = new MutationObserver(() => {
-    if (replyObserver._scheduled) return;
-    replyObserver._scheduled = true;
     setTimeout(() => {
-      replyObserver._scheduled = false;
       const latest = findLatestAssistantText();
       if (latest && latest !== lastSeen) {
         lastSeen = latest;
-        // strip mood tags only for display detection if needed
         updateAvatar(latest);
       }
     }, 150);
   });
   replyObserver.observe(document.body, { childList: true, subtree: true });
 
-  // expose a force helper for manual tests
+  // Manual force
   window.__marshal_avatar_force = function (s) {
     lastSeen = s;
     updateAvatar(s);
-    console.info('Marshal-avatar forced to:', s);
   };
-
-  // cleanup on unload
-  window.addEventListener('beforeunload', () => {
-    try { replyObserver.disconnect(); } catch (e) {}
-    try { mo.disconnect(); } catch (e) {}
-    try { if (roSidebar) roSidebar.disconnect(); if (roMain) roMain.disconnect(); } catch (e) {}
-    if (container && container.parentNode) container.parentNode.removeChild(container);
-  });
-
-  // final: ensure initial positioning applied in case observers fire late
-  setTimeout(updateLayout, 250);
-  setTimeout(updateLayout, 800);
 })();
-

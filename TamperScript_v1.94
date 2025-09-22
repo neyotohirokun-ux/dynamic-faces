@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Marshal Mood-Based Face (248x248) - v1.93 (sidebar fix + toggle debug)
+// @name         Marshal Mood-Based Face (248x248) - v1.94 (stable detection)
 // @namespace    http://tampermonkey.net/
-// @version      1.93 
-// @description  Avatar changes with expression-specific animations, detects sidebar open/close reliably, debug toggleable.
+// @version      1.94
+// @description  Avatar changes with expression-specific animations, stable assistant detection, debug toggleable.
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*
 // @grant        none
@@ -22,6 +22,7 @@
   const SIZE_SMALL = 126;
   const SIZE_LARGE = 180;
 
+  // === Container ===
   const container = document.createElement('div');
   container.id = 'marshal-avatar-container';
   Object.assign(container.style, {
@@ -55,7 +56,7 @@
   label.textContent = 'Essex';
   Object.assign(label.style, {
     position: 'absolute',
-    bottom: (-20) + 'px',
+    bottom: '-20px',
     left: '0',
     fontSize: '11px',
     color: '#dff7ff',
@@ -67,6 +68,7 @@
 
   (document.body || document.documentElement).appendChild(container);
 
+  // === Styles ===
   const style = document.createElement('style');
   style.textContent = `
     @keyframes smugSway { 0%{transform:rotate(0)}30%{transform:rotate(-4deg)}60%{transform:rotate(3deg)}100%{transform:rotate(0)} }
@@ -104,7 +106,7 @@
   debugBox.id = 'marshal-debug';
   document.body.appendChild(debugBox);
 
-  // Helper functions
+  // === Sidebar helpers ===
   function isVisible(el) {
     if (!el) return false;
     const cs = getComputedStyle(el);
@@ -130,23 +132,19 @@
       const main = findMain();
       const mainRect = main ? main.getBoundingClientRect() : null;
 
-      // NEW RULE: Sidebar is open if main area shifted to the right
       const sidebarOpen = mainRect ? (mainRect.left > 100) : !!sidebar;
       const targetSize = sidebarOpen ? SIZE_SMALL : SIZE_LARGE;
       const targetBottom = sidebarOpen ? 110 : 170;
       let leftPx = mainRect ? Math.max(8, Math.round(mainRect.left + 10)) : 12;
       if (!sidebarOpen) leftPx = 12;
 
-      // Resize + reposition
       container.style.width = targetSize + 'px';
       container.style.height = targetSize + 'px';
       img.width = targetSize;
       img.height = targetSize;
-      const margin = 16;
-      container.style.left = (leftPx + margin) + 'px';
+      container.style.left = (leftPx + 16) + 'px';
       container.style.bottom = targetBottom + 'px';
 
-      // Debug toggle
       if (window.__marshal_avatar_debug) {
         debugBox.style.display = 'block';
         debugBox.textContent =
@@ -164,14 +162,13 @@
     }
   }
 
-  // Initial + observers
   updateLayout();
   const mo = new MutationObserver(() => setTimeout(updateLayout, 120));
   mo.observe(document.body, { childList: true, subtree: true, attributes: true });
   window.addEventListener('resize', updateLayout, { passive: true });
   setInterval(updateLayout, 500);
 
-  // Face switching
+  // === Mood logic ===
   function pickFaceByText(text) {
     if (!text) return faces[0];
     const lower = text.toLowerCase();
@@ -201,7 +198,9 @@
 
   function updateAvatar(text) {
     const newSrc = pickFaceByText(text);
-    if (!img.src.endsWith(newSrc)) {
+    const current = img.src.split('/').pop();
+    const target = newSrc.split('/').pop();
+    if (current !== target) {
       img.style.opacity = '0';
       setTimeout(() => {
         img.src = newSrc;
@@ -213,17 +212,18 @@
     }
   }
 
+  // === Stable assistant text detection ===
   function findLatestAssistantText() {
-    const els = Array.from(document.querySelectorAll('div[data-testid="assistant-response"], div[data-testid="message-content"], div[class*="assistant"]'));
+    // Grab all message containers, look for ones with "assistant" role
+    const els = Array.from(document.querySelectorAll('div, article, section'))
+      .filter(el => {
+        const role = el.getAttribute('data-message-author-role');
+        return role === 'assistant';
+      });
+
     if (!els.length) return null;
-    let latest = null, maxTop = -Infinity;
-    for (const el of els) {
-      const txt = (el.innerText || '').trim();
-      if (!txt || txt.length < 10) continue;
-      const r = el.getBoundingClientRect();
-      if (r.top > maxTop) { maxTop = r.top; latest = txt; }
-    }
-    return latest;
+    const last = els[els.length - 1];
+    return (last.innerText || '').trim();
   }
 
   let lastSeen = null;

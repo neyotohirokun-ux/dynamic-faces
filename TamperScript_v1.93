@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Marshal Mood-Based Face (248x248) - v1.93 (sidebar fix + toggle debug)
 // @namespace    http://tampermonkey.net/
-// @version      1.93
+// @version      1.93 
 // @description  Avatar changes with expression-specific animations, detects sidebar open/close reliably, debug toggleable.
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*

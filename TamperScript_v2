@@ -1,0 +1,258 @@
+// ==UserScript==
+// @name         Marshal Mood-Based Face + Switch Room (v2.0 fixed)
+// @namespace    http://tampermonkey.net/
+// @version      2.0
+// @description  Avatar changes + new chat room interface with return button
+// @match        https://chat.openai.com/*
+// @match        https://chatgpt.com/*
+// @grant        none
+// ==/UserScript==
+(function () {
+  'use strict';
+
+  // === Avatars ===
+  const faces = [
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/1.png", // smug
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/2.png", // angry
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/3.png", // happy
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/4.png", // annoyed
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/5.png", // smirk
+    "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/6.png"  // shy
+  ];
+
+  const SIZE_SMALL = 126;
+  const SIZE_LARGE = 200;
+
+  // === Container ===
+  const container = document.createElement('div');
+  container.id = 'marshal-avatar-container';
+  Object.assign(container.style, {
+    position: 'fixed',
+    left: '20px',
+    bottom: '110px',
+    width: SIZE_SMALL + 'px',
+    height: SIZE_SMALL + 'px',
+    zIndex: 2147483647,
+    pointerEvents: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 240ms ease',
+    transformOrigin: 'bottom left'
+  });
+
+  const img = document.createElement('img');
+  img.src = faces[0];
+  img.width = SIZE_SMALL;
+  img.height = SIZE_SMALL;
+  Object.assign(img.style, {
+    objectFit: 'contain',
+    borderRadius: '12px',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+    display: 'block'
+  });
+  container.appendChild(img);
+
+  const label = document.createElement('div');
+  label.textContent = 'Essex';
+  Object.assign(label.style, {
+    position: 'absolute',
+    bottom: '-20px',
+    left: '0',
+    fontSize: '11px',
+    color: '#dff7ff',
+    textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+    pointerEvents: 'none',
+    opacity: '0.95'
+  });
+  container.appendChild(label);
+
+  (document.body || document.documentElement).appendChild(container);
+
+  // === Room Overlay ===
+  const roomOverlay = document.createElement('div');
+  roomOverlay.id = 'marshal-room';
+  Object.assign(roomOverlay.style, {
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    width: '100%',
+    height: '100%',
+    background: '#111',
+    color: '#fff',
+    display: 'none',
+    flexDirection: 'row',
+    zIndex: 2147483646
+  });
+
+  // Left: Avatar/Expressions
+  const leftPanel = document.createElement('div');
+  Object.assign(leftPanel.style, {
+    width: '33%',
+    padding: '10px',
+    borderRight: '1px solid #333',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center'
+  });
+  const leftImg = document.createElement('img');
+  leftImg.src = faces[0];
+  leftImg.style.width = '200px';
+  leftImg.style.borderRadius = '12px';
+  leftPanel.appendChild(leftImg);
+  roomOverlay.appendChild(leftPanel);
+
+  // Right: Chat area
+  const rightPanel = document.createElement('div');
+  Object.assign(rightPanel.style, {
+    width: '67%',
+    padding: '10px',
+    display: 'flex',
+    flexDirection: 'column',
+    overflowY: 'auto'
+  });
+  const topBar = document.createElement('div');
+  Object.assign(topBar.style, {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginBottom: '10px'
+  });
+  const returnBtn = document.createElement('button');
+  returnBtn.textContent = '⟲ Return';
+  Object.assign(returnBtn.style, {
+    padding: '6px 12px',
+    borderRadius: '8px',
+    background: '#444',
+    color: '#fff',
+    border: 'none',
+    cursor: 'pointer'
+  });
+  returnBtn.addEventListener('click', () => {
+    const main = document.querySelector('main');
+    const sidebar = document.querySelector('nav, aside, div[data-testid="sidebar"]');
+
+    if (main) main.style.display = '';
+    if (sidebar) sidebar.style.display = '';
+
+    container.style.display = 'flex';
+    roomOverlay.style.display = 'none';
+  });
+  topBar.appendChild(returnBtn);
+  rightPanel.appendChild(topBar);
+
+  const convoArea = document.createElement('div');
+  convoArea.id = 'marshal-convo';
+  Object.assign(convoArea.style, {
+    flex: '1',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px'
+  });
+  rightPanel.appendChild(convoArea);
+  roomOverlay.appendChild(rightPanel);
+
+  document.body.appendChild(roomOverlay);
+
+  // === Sidebar Button ===
+  function addSwitchRoomButton() {
+    const sidebar = document.querySelector('nav, aside, div[data-testid="sidebar"]');
+    if (!sidebar || document.querySelector('#switch-room-btn')) return;
+
+    // Create new button
+    const btn = document.createElement('div');
+    btn.id = 'switch-room-btn';
+    btn.className = 'group flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:bg-gray-700 hover:text-white cursor-pointer';
+    btn.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M17 8h2a2 2 0 012 2v7a2 2 0 01-2 2h-2M7 8H5a2 2 0 00-2 2v7a2 2 0 002 2h2m10-12V6a2 2 0 00-2-2H9a2 2 0 00-2 2v2m10 0H7"/>
+      </svg>
+      <span>Switch Room</span>
+    `;
+
+    btn.addEventListener('click', () => {
+      const main = document.querySelector('main');
+      const sidebar = document.querySelector('nav, aside, div[data-testid="sidebar"]');
+
+      if (main) main.style.display = 'none';
+      if (sidebar) sidebar.style.display = 'none';
+
+      container.style.display = 'none';
+      roomOverlay.style.display = 'flex';
+    });
+
+    // Find the Library button and insert Switch Room before it
+    const libraryBtn = Array.from(sidebar.querySelectorAll('div, a, button'))
+      .find(el => el.textContent.trim() === 'Library');
+
+    if (libraryBtn && libraryBtn.parentNode) {
+      libraryBtn.parentNode.insertBefore(btn, libraryBtn);
+    } else {
+      sidebar.appendChild(btn); // fallback
+    }
+  }
+
+  // Watch for sidebar changes
+  const sidebarObserver = new MutationObserver(() => addSwitchRoomButton());
+  sidebarObserver.observe(document.body, { childList: true, subtree: true });
+  setTimeout(addSwitchRoomButton, 2000);
+
+  // === Mood logic ===
+  function pickFaceByText(text) {
+    if (!text) return faces[0];
+    const lower = text.toLowerCase();
+    if (/\[mood:smug\]/.test(lower)) return faces[0];
+    if (/\[mood:angry\]/.test(lower)) return faces[1];
+    if (/\[mood:happy\]/.test(lower)) return faces[2];
+    if (/\[mood:annoyed\]/.test(lower)) return faces[3];
+    if (/\[mood:smirk\]/.test(lower)) return faces[4];
+    if (/\[mood:shy\]/.test(lower)) return faces[5];
+    if (/(thank you|thanks|glad|appreciate)/.test(lower)) return faces[2];
+    if (/(angry|rage|attack|war)/.test(lower)) return faces[1];
+    if (/(ugh|annoyed|tired|seriously)/.test(lower)) return faces[3];
+    if (/(smirk|hehe|sneaky|heh)/.test(lower)) return faces[4];
+    if (/(maybe|uh|blush|shy)/.test(lower)) return faces[5];
+    return faces[0];
+  }
+
+  function updateAvatar(text) {
+    const newSrc = pickFaceByText(text);
+    img.src = newSrc;
+    leftImg.src = newSrc; // also update in chat room
+  }
+
+  function findLatestAssistantText() {
+    const els = Array.from(document.querySelectorAll('div, article, section'))
+      .filter(el => el.getAttribute('data-message-author-role') === 'assistant');
+    if (!els.length) return null;
+    const last = els[els.length - 1];
+    return (last.innerText || '').trim();
+  }
+
+  let lastSeen = null;
+  const replyObserver = new MutationObserver(() => {
+    setTimeout(() => {
+      const latest = findLatestAssistantText();
+      if (latest && latest !== lastSeen) {
+        lastSeen = latest;
+        updateAvatar(latest);
+
+        // also add to convoArea
+        const bubble = document.createElement('div');
+        bubble.textContent = latest;
+        Object.assign(bubble.style, {
+          maxWidth: '75%',
+          padding: '10px 14px',
+          borderRadius: '16px',
+          background: '#e5e5ea',
+          color: '#000',
+          alignSelf: 'flex-start'
+        });
+        convoArea.appendChild(bubble);
+        convoArea.scrollTop = convoArea.scrollHeight;
+      }
+    }, 150);
+  });
+  replyObserver.observe(document.body, { childList: true, subtree: true });
+})();

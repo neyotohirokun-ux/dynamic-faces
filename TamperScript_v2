@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Marshal Mood-Based Face + Switch Room (v2.0 fixed)
+// @name         Marshal Mood-Based Face + Switch Room (v2.1 mirrored clean)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Avatar changes + new chat room interface with return button
+// @version      2.1
+// @description  Custom EDE chat room with avatar + mirrored bubbles + typing indicator
 // @match        https://chat.openai.com/*
 // @match        https://chatgpt.com/*
 // @grant        none
@@ -20,18 +20,15 @@
     "https://raw.githubusercontent.com/neyotohirokun-ux/dynamic-faces/main/6.png"  // shy
   ];
 
-  const SIZE_SMALL = 126;
-  const SIZE_LARGE = 200;
-
-  // === Container ===
+  // === Container (avatar floating) ===
   const container = document.createElement('div');
   container.id = 'marshal-avatar-container';
   Object.assign(container.style, {
     position: 'fixed',
     left: '20px',
     bottom: '110px',
-    width: SIZE_SMALL + 'px',
-    height: SIZE_SMALL + 'px',
+    width: '126px',
+    height: '126px',
     zIndex: 2147483647,
     pointerEvents: 'none',
     display: 'flex',
@@ -43,8 +40,8 @@
 
   const img = document.createElement('img');
   img.src = faces[0];
-  img.width = SIZE_SMALL;
-  img.height = SIZE_SMALL;
+  img.width = 126;
+  img.height = 126;
   Object.assign(img.style, {
     objectFit: 'contain',
     borderRadius: '12px',
@@ -147,11 +144,31 @@
     flex: '1',
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px'
+    gap: '8px',
+    overflowY: 'auto'
   });
   rightPanel.appendChild(convoArea);
-  roomOverlay.appendChild(rightPanel);
 
+  // Typing indicator
+  const typingIndicator = document.createElement('div');
+  typingIndicator.textContent = 'Essex is typing...';
+  Object.assign(typingIndicator.style, {
+    fontStyle: 'italic',
+    color: '#aaa',
+    padding: '6px',
+    display: 'none'
+  });
+  convoArea.appendChild(typingIndicator);
+
+  // Place input bar from original ChatGPT into Switch Room
+  const originalInput = document.querySelector('main form');
+  if (originalInput) {
+    const clonedInput = originalInput.cloneNode(true);
+    clonedInput.id = 'marshal-input';
+    rightPanel.appendChild(clonedInput);
+  }
+
+  roomOverlay.appendChild(rightPanel);
   document.body.appendChild(roomOverlay);
 
   // === Sidebar Button ===
@@ -159,7 +176,6 @@
     const sidebar = document.querySelector('nav, aside, div[data-testid="sidebar"]');
     if (!sidebar || document.querySelector('#switch-room-btn')) return;
 
-    // Create new button
     const btn = document.createElement('div');
     btn.id = 'switch-room-btn';
     btn.className = 'group flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:bg-gray-700 hover:text-white cursor-pointer';
@@ -170,7 +186,6 @@
       </svg>
       <span>Switch Room</span>
     `;
-
     btn.addEventListener('click', () => {
       const main = document.querySelector('main');
       const sidebar = document.querySelector('nav, aside, div[data-testid="sidebar"]');
@@ -182,18 +197,15 @@
       roomOverlay.style.display = 'flex';
     });
 
-    // Find the Library button and insert Switch Room before it
     const libraryBtn = Array.from(sidebar.querySelectorAll('div, a, button'))
       .find(el => el.textContent.trim() === 'Library');
 
     if (libraryBtn && libraryBtn.parentNode) {
       libraryBtn.parentNode.insertBefore(btn, libraryBtn);
     } else {
-      sidebar.appendChild(btn); // fallback
+      sidebar.appendChild(btn);
     }
   }
-
-  // Watch for sidebar changes
   const sidebarObserver = new MutationObserver(() => addSwitchRoomButton());
   sidebarObserver.observe(document.body, { childList: true, subtree: true });
   setTimeout(addSwitchRoomButton, 2000);
@@ -219,9 +231,10 @@
   function updateAvatar(text) {
     const newSrc = pickFaceByText(text);
     img.src = newSrc;
-    leftImg.src = newSrc; // also update in chat room
+    leftImg.src = newSrc;
   }
 
+  // === Observer to mirror conversation ===
   function findLatestAssistantText() {
     const els = Array.from(document.querySelectorAll('div, article, section'))
       .filter(el => el.getAttribute('data-message-author-role') === 'assistant');
@@ -230,15 +243,43 @@
     return (last.innerText || '').trim();
   }
 
-  let lastSeen = null;
+  function findLatestUserText() {
+    const els = Array.from(document.querySelectorAll('div, article, section'))
+      .filter(el => el.getAttribute('data-message-author-role') === 'user');
+    if (!els.length) return null;
+    const last = els[els.length - 1];
+    return (last.innerText || '').trim();
+  }
+
+  let lastAssistant = null;
+  let lastUser = null;
+
   const replyObserver = new MutationObserver(() => {
     setTimeout(() => {
+      const userMsg = findLatestUserText();
+      if (userMsg && userMsg !== lastUser) {
+        lastUser = userMsg;
+        const bubble = document.createElement('div');
+        bubble.textContent = userMsg;
+        Object.assign(bubble.style, {
+          maxWidth: '75%',
+          padding: '10px 14px',
+          borderRadius: '16px',
+          background: '#0078ff',
+          color: '#fff',
+          alignSelf: 'flex-end'
+        });
+        convoArea.appendChild(bubble);
+        convoArea.scrollTop = convoArea.scrollHeight;
+        typingIndicator.style.display = 'block'; // show typing...
+      }
+
       const latest = findLatestAssistantText();
-      if (latest && latest !== lastSeen) {
-        lastSeen = latest;
+      if (latest && latest !== lastAssistant) {
+        lastAssistant = latest;
+        typingIndicator.style.display = 'none'; // hide typing when reply arrives
         updateAvatar(latest);
 
-        // also add to convoArea
         const bubble = document.createElement('div');
         bubble.textContent = latest;
         Object.assign(bubble.style, {
